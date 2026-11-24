@@ -1,0 +1,36 @@
+import pandas as pd
+
+file_path = "data/08_2026_december_plan.xlsx"
+df = pd.read_excel(file_path, sheet_name="Общий")  # план по каждой точке и каждому дню
+days = pd.read_excel(file_path, sheet_name="Дни").set_index("Локация")  # среднее дня, строка — Москва или Область
+weeks_ref = pd.read_excel(file_path, sheet_name="Недели").set_index("Локация")  # среднее недели по той же локации
+
+date_columns = list(df.columns[2:33])  # «1 декабря» … «31 декабря», без колонок локации и точки
+months = {"ноября": 11, "декабря": 12}  # месяц в заголовке колонки → номер месяца
+
+# 1. День. Если |день − среднее локации| > 0.018, в ячейку пишется среднее
+for day_col in date_columns:
+    avg = df["Локация"].map(days[day_col])  # каждой точке — среднее её локации за этот день
+    df[day_col] = df[day_col].where((df[day_col] - avg).abs() <= 0.018, avg)  # внутри порога оставляем факт
+
+# Дни раскладываются по номерам недель: декабрь 2026 — это недели 49–53
+groups = {}
+for day_col in date_columns:
+    day, month = str(day_col).split()  # «10 декабря» → день 10 и слово «декабря»
+    week = int(pd.Timestamp(2026, months[month], int(day)).isocalendar().week)  # ISO-неделя этой даты
+    groups.setdefault(week, []).append(day_col)  # колонки одной недели собираем в один список
+
+# 2. Неделя. Если |сумма − среднее локации| > 0.018, дни недели умножаются на среднее / сумма
+for week, cols in groups.items():
+    avg = df["Локация"].map(weeks_ref[f"{week} неделя"])  # среднее этой недели с листа «Недели»
+    sums = df[cols].sum(axis=1)  # сумма дней точки за неделю уже после правки дней
+    mask = ((sums - avg).abs() > 0.018) & (sums != 0)  # кого менять; ноль нельзя ставить в делитель
+    df.loc[mask, cols] = df.loc[mask, cols].mul((avg / sums)[mask], axis=0)  # сумма становится равна среднему
+
+# 3. Нормализация. Каждый день делится на сумму 31 дня своей точки, вместе получается 100%
+row_sums = df[date_columns].sum(axis=1)
+df[date_columns] = df[date_columns].div(row_sums, axis=0)
+
+df.to_excel("output/план.xlsx", sheet_name="Лист1", index=False)
+print(df.groupby("Локация").size())
+print((df[date_columns].sum(axis=1) - 1).abs().max())  # контроль: остаток от 1 должен быть пылью float
